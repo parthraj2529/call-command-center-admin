@@ -1,225 +1,105 @@
 
 const express = require('express');
-const router = express.Router();
 const pool = require('../utils/db');
 const twilio = require('twilio');
+
+const router = express.Router();
 
 // Get all calls
 router.get('/', async (req, res) => {
   try {
-    const [calls] = await pool.query(`
-      SELECT c.*, a.name as agent_name 
-      FROM calls c
-      LEFT JOIN agents a ON c.agent_id = a.id
-      ORDER BY c.created_at DESC
-    `);
-    
-    const formattedCalls = calls.map(call => ({
-      id: call.id,
-      callSid: call.call_sid,
-      from: call.from_number,
-      to: call.to_number,
-      status: call.status,
-      direction: call.direction,
-      duration: call.duration,
-      recordingUrl: call.recording_url,
-      agentId: call.agent_id,
-      agentName: call.agent_name,
-      notes: call.notes,
-      createdAt: call.created_at
-    }));
-    
-    res.json(formattedCalls);
+    const [rows] = await pool.query(
+      'SELECT * FROM calls ORDER BY created_at DESC'
+    );
+    res.json(rows);
   } catch (error) {
     console.error('Error fetching calls:', error);
-    res.status(500).json({ error: 'Failed to fetch calls' });
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
 // Get call by ID
 router.get('/:id', async (req, res) => {
   try {
-    const [calls] = await pool.query(`
-      SELECT c.*, a.name as agent_name 
-      FROM calls c
-      LEFT JOIN agents a ON c.agent_id = a.id
-      WHERE c.id = ?
-    `, [req.params.id]);
+    const [rows] = await pool.query(
+      'SELECT * FROM calls WHERE id = ?',
+      [req.params.id]
+    );
     
-    if (calls.length === 0) {
-      return res.status(404).json({ error: 'Call not found' });
+    if (rows.length === 0) {
+      return res.status(404).json({ message: 'Call not found' });
     }
     
-    const call = calls[0];
-    const formattedCall = {
-      id: call.id,
-      callSid: call.call_sid,
-      from: call.from_number,
-      to: call.to_number,
-      status: call.status,
-      direction: call.direction,
-      duration: call.duration,
-      recordingUrl: call.recording_url,
-      agentId: call.agent_id,
-      agentName: call.agent_name,
-      notes: call.notes,
-      createdAt: call.created_at
-    };
-    
-    res.json(formattedCall);
+    res.json(rows[0]);
   } catch (error) {
     console.error('Error fetching call:', error);
-    res.status(500).json({ error: 'Failed to fetch call' });
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
-// Initiate a new call
-router.post('/', async (req, res) => {
-  const { to, agentId } = req.body;
-  
-  if (!to || !agentId) {
-    return res.status(400).json({ error: 'Phone number and agent ID are required' });
-  }
-  
+// Make a new call
+router.post('/make-call', async (req, res) => {
   try {
-    // Get agent info
-    const [agents] = await pool.query('SELECT * FROM agents WHERE id = ?', [agentId]);
+    const { to, from, agentId } = req.body;
     
-    if (agents.length === 0) {
-      return res.status(404).json({ error: 'Agent not found' });
+    if (!to || !from) {
+      return res.status(400).json({ message: 'To and from numbers are required' });
     }
     
-    const agent = agents[0];
-    
-    // Check if agent is available
-    if (agent.status !== 'available') {
-      return res.status(400).json({ error: 'Agent is not available' });
-    }
-    
-    // Initialize Twilio client
-    const twilioClient = twilio(
+    // Create Twilio client
+    const client = twilio(
       process.env.TWILIO_ACCOUNT_SID,
       process.env.TWILIO_AUTH_TOKEN
     );
     
-    // Make a call using Twilio
-    const call = await twilioClient.calls.create({
-      url: `${process.env.BASE_URL}/api/twilio/connect/${agentId}`,
-      to: to,
-      from: process.env.TWILIO_PHONE_NUMBER,
+    // Make the call
+    const call = await client.calls.create({
+      to,
+      from,
+      url: `${process.env.BASE_URL}/api/twilio/voice`,
+      statusCallback: `${process.env.BASE_URL}/api/twilio/call-status`,
+      statusCallbackMethod: 'POST',
     });
     
     // Save call to database
     const [result] = await pool.query(
-      'INSERT INTO calls (call_sid, from_number, to_number, status, direction, agent_id) VALUES (?, ?, ?, ?, ?, ?)',
-      [call.sid, process.env.TWILIO_PHONE_NUMBER, to, 'initiated', 'outbound', agentId]
+      'INSERT INTO calls (call_sid, from_number, to_number, status, agent_id) VALUES (?, ?, ?, ?, ?)',
+      [call.sid, from, to, call.status, agentId]
     );
-    
-    // Update agent status
-    await pool.query('UPDATE agents SET status = ? WHERE id = ?', ['busy', agentId]);
     
     res.status(201).json({
       id: result.insertId,
       callSid: call.sid,
-      from: process.env.TWILIO_PHONE_NUMBER,
-      to: to,
-      status: 'initiated',
-      direction: 'outbound',
-      agentId: agentId,
-      agentName: agent.name,
-      createdAt: new Date().toISOString()
+      from,
+      to,
+      status: call.status,
+      agentId
     });
   } catch (error) {
-    console.error('Error initiating call:', error);
-    res.status(500).json({ error: 'Failed to initiate call' });
+    console.error('Error making call:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
-// Update call notes
-router.patch('/:id/notes', async (req, res) => {
-  const { notes } = req.body;
-  const callId = req.params.id;
-  
+// Update agent status
+router.put('/agent-status/:agentId', async (req, res) => {
   try {
-    const [result] = await pool.query(
-      'UPDATE calls SET notes = ? WHERE id = ?',
-      [notes, callId]
-    );
+    const { status } = req.body;
+    const agentId = req.params.agentId;
     
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ error: 'Call not found' });
+    if (!status) {
+      return res.status(400).json({ message: 'Status is required' });
     }
     
-    res.json({ id: parseInt(callId), notes });
+    await pool.query(
+      'UPDATE agents SET status = ? WHERE id = ?',
+      [status, agentId]
+    );
+    
+    res.json({ message: 'Agent status updated successfully' });
   } catch (error) {
-    console.error('Error updating call notes:', error);
-    res.status(500).json({ error: 'Failed to update call notes' });
-  }
-});
-
-// Get call analytics
-router.get('/analytics/summary', async (req, res) => {
-  const { startDate, endDate } = req.query;
-  
-  let dateFilter = '';
-  const params = [];
-  
-  if (startDate && endDate) {
-    dateFilter = 'WHERE created_at BETWEEN ? AND ?';
-    params.push(startDate, endDate);
-  } else if (startDate) {
-    dateFilter = 'WHERE created_at >= ?';
-    params.push(startDate);
-  } else if (endDate) {
-    dateFilter = 'WHERE created_at <= ?';
-    params.push(endDate);
-  }
-  
-  try {
-    // Get total calls
-    const [totalResult] = await pool.query(
-      `SELECT COUNT(*) as total FROM calls ${dateFilter}`,
-      params
-    );
-    
-    // Get calls by status
-    const [statusResult] = await pool.query(
-      `SELECT status, COUNT(*) as count FROM calls ${dateFilter} GROUP BY status`,
-      params
-    );
-    
-    // Get calls by direction
-    const [directionResult] = await pool.query(
-      `SELECT direction, COUNT(*) as count FROM calls ${dateFilter} GROUP BY direction`,
-      params
-    );
-    
-    // Get average call duration
-    const [durationResult] = await pool.query(
-      `SELECT AVG(duration) as avg_duration FROM calls ${dateFilter} WHERE duration > 0`,
-      params
-    );
-    
-    // Get calls per agent
-    const [agentResult] = await pool.query(
-      `SELECT a.id, a.name, COUNT(c.id) as call_count
-       FROM agents a
-       LEFT JOIN calls c ON a.id = c.agent_id ${dateFilter ? 'AND ' + dateFilter.substring(6) : ''}
-       GROUP BY a.id, a.name
-       ORDER BY call_count DESC`,
-      params
-    );
-    
-    res.json({
-      totalCalls: totalResult[0].total,
-      callsByStatus: statusResult,
-      callsByDirection: directionResult,
-      avgDuration: durationResult[0].avg_duration || 0,
-      callsPerAgent: agentResult
-    });
-  } catch (error) {
-    console.error('Error fetching call analytics:', error);
-    res.status(500).json({ error: 'Failed to fetch call analytics' });
+    console.error('Error updating agent status:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 

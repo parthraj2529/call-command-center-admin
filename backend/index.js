@@ -29,10 +29,8 @@ const pool = mysql.createPool({
 });
 
 // Initialize Twilio client
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN ? 
+  twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN) : null;
 
 // Test database connection
 app.get('/api/health', async (req, res) => {
@@ -48,15 +46,18 @@ app.get('/api/health', async (req, res) => {
 
 // Import routes
 const authRoutes = require('./routes/authRoutes');
+const agentRoutes = require('./routes/agentRoutes');
+const callRoutes = require('./routes/callRoutes');
+const settingsRoutes = require('./routes/settingsRoutes');
 const { authenticateToken } = require('./routes/authRoutes');
 
 // Public routes
 app.use('/api/auth', authRoutes);
 
 // Protected routes - require authentication
-app.use('/api/agents', authenticateToken, require('./routes/agentRoutes'));
-app.use('/api/calls', authenticateToken, require('./routes/callRoutes'));
-app.use('/api/settings', authenticateToken, require('./routes/settingsRoutes'));
+app.use('/api/agents', authenticateToken, agentRoutes);
+app.use('/api/calls', authenticateToken, callRoutes);
+app.use('/api/settings', authenticateToken, settingsRoutes);
 
 // Twilio webhook for incoming calls
 app.post('/api/twilio/voice', (req, res) => {
