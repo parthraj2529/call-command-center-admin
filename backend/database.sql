@@ -3,6 +3,22 @@
 CREATE DATABASE IF NOT EXISTS callcenter_db;
 USE callcenter_db;
 
+-- Users table
+CREATE TABLE IF NOT EXISTS `users` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `username` VARCHAR(50) NOT NULL UNIQUE,
+  `password` VARCHAR(255) NOT NULL,
+  `name` VARCHAR(100),
+  `email` VARCHAR(100),
+  `role` ENUM('admin', 'manager', 'user') DEFAULT 'user',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- Insert admin user (password is "password123")
+INSERT INTO `users` (`username`, `password`, `name`, `email`, `role`) VALUES
+('admin', '$2b$10$9t/uv7ZOUWc9wAEOj7fMTuMazWOx2tYZO6sXOLxvS7.XjlCiCBMDm', 'Admin User', 'admin@example.com', 'admin');
+
 -- Agents table
 CREATE TABLE IF NOT EXISTS `agents` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,

@@ -46,10 +46,17 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// API Routes
-app.use('/api/agents', require('./routes/agentRoutes'));
-app.use('/api/calls', require('./routes/callRoutes'));
-app.use('/api/settings', require('./routes/settingsRoutes'));
+// Import routes
+const authRoutes = require('./routes/authRoutes');
+const { authenticateToken } = require('./routes/authRoutes');
+
+// Public routes
+app.use('/api/auth', authRoutes);
+
+// Protected routes - require authentication
+app.use('/api/agents', authenticateToken, require('./routes/agentRoutes'));
+app.use('/api/calls', authenticateToken, require('./routes/callRoutes'));
+app.use('/api/settings', authenticateToken, require('./routes/settingsRoutes'));
 
 // Twilio webhook for incoming calls
 app.post('/api/twilio/voice', (req, res) => {
